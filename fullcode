@@ -1,0 +1,87 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h> // İŞTE YENİ NESİL SİLAHIMIZ
+#include <WiFiClient.h>
+#include <Wire.h>
+#include "MAX30100_PulseOximeter.h"
+
+const char* ssid = "samsung9838";         
+const char* password = "123456789";     
+String apiKey = "8U3KU97XLWSK6YY8"; 
+
+PulseOximeter pox;
+uint32_t sonGonderimZamani = 0;
+
+void onBeatDetected() {
+    Serial.println("Nabiz Atisi Algilandi! ♥");
+}
+
+void setup() {
+    Serial.begin(115200);
+    
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWi-Fi Baglantisi Sahane!");
+
+    Serial.print("MAX30100 Baslatiliyor...");
+    if (!pox.begin()) {
+        Serial.println("HATA: Sensor bulunamadi!");
+        for(;;); 
+    }
+    Serial.println("BASARILI!");
+    
+    pox.setIRLedCurrent(MAX30100_LED_CURR_27_1MA);
+    pox.setOnBeatDetectedCallback(onBeatDetected);
+}
+
+void loop() {
+    // 1. GÖREV: Sensörü kesintisiz oku
+    pox.update();
+
+    // 2. GÖREV: 20 Saniye kuralı ve Mantıklı Nabız kontrolü
+    if ((millis() - sonGonderimZamani > 20000) && (pox.getHeartRate() > 40)) {
+        
+        float gercekBPM = pox.getHeartRate();
+        float gercekSpO2 = pox.getSpO2();
+
+        Serial.print("Klinik Veri -> BPM: ");
+        Serial.print(gercekBPM);
+        Serial.print(" | SpO2: %");
+        Serial.println(gercekSpO2);
+
+        // --- YENİ NESİL BULUT OPERASYONU (HTTPClient) ---
+        if (WiFi.status() == WL_CONNECTED) {
+            WiFiClient client;
+            HTTPClient http;
+            
+            // URL'yi hazırlıyoruz
+            String url = "http://api.thingspeak.com/update?api_key=" + apiKey + "&field1=" + String(gercekBPM) + "&field2=" + String(gercekSpO2);
+            
+            // Füzeyi kilitliyoruz
+            http.begin(client, url);
+            
+            // Füzeyi ateşliyoruz ve cevabı alıyoruz (Sadece milisaniyeler sürer!)
+            int httpCode = http.GET();
+            
+            if (httpCode > 0) {
+                Serial.print(">>> ThingSpeak Gonderim Basarili! Sunucu Kodu: ");
+                Serial.println(httpCode); // 200 yazarsa kusursuz demektir!
+            } else {
+                Serial.println(">>> HATA: Veri Gonderilemedi!");
+            }
+            
+            // Bağlantıyı jilet gibi kapatıp hafızayı tertemiz yapıyoruz
+            http.end(); 
+            Serial.println("------------------------------------------------");
+            
+        } else {
+            Serial.println("HATA: Wi-Fi Koptu!");
+        }
+        
+        // Sensörü resetlemek yok, I2C hattını kilitlemek yok!
+        // Kronometreyi sıfırla ve ava devam et
+        sonGonderimZamani = millis();
+    }
+}
